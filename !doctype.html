@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>中文WPM考核（智能对齐｜只算输入范围错误｜标点兼容）</title>
+<style>
+  body{font-family:"Microsoft YaHei",Arial;margin:10px}
+  .wrap{max-width:920px;margin:0 auto}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+  input{padding:6px 8px;border:1px solid #ccc;border-radius:8px;min-width:220px}
+  button{padding:7px 12px;border:1px solid #ccc;border-radius:10px;background:#fff;cursor:pointer}
+  button.primary{border-color:#111}
+  button:disabled{opacity:.5;cursor:not-allowed}
+
+  textarea{width:100%;height:120px;font-size:16px;line-height:1.6;padding:8px;border:1px solid #ccc;border-radius:10px;outline:none}
+
+  .panel{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .box{border:1px solid #ddd;border-radius:10px;padding:6px 10px;min-width:130px}
+  .big{font-size:20px;font-weight:800}
+
+  .display{border:1px solid #ccc;border-radius:10px;padding:8px;white-space:pre-wrap;word-break:break-word;font-size:16px;line-height:1.6}
+  .label{font-weight:800;margin:6px 0}
+
+  .ok{background:rgba(0,200,0,.16);border-radius:4px;padding:0 1px}
+  .bad{background:#d32f2f;color:#fff;border-radius:4px;padding:0 1px}
+  .ins{background:#ff9800;color:#000;border-radius:4px;padding:0 1px}
+  .muted{color:#888}
+  .warn{color:#b00020;font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="row">
+    <div style="font-weight:900;font-size:18px;">中文WPM考核（智能对齐｜只算输入范围错误｜标点兼容）</div>
+  </div>
+
+  <div class="row">
+    姓名：<input id="name" placeholder="员工姓名">
+    <span class="warn">禁粘贴：判无效</span>
+  </div>
+
+  <div class="panel">
+    <div class="box">时间 <span class="big" id="time">60</span>s</div>
+    <div class="box">WPM <span class="big" id="wpm">0</span></div>
+    <div class="box">正确 <span class="big" id="correct">0</span></div>
+    <div class="box">错误 <span class="big" id="wrong">0</span></div>
+    <div class="box">正确率 <span class="big" id="acc">0%</span></div>
+    <div class="box">最好 <span class="big" id="best">0</span></div>
+    <div class="box">次数 <span class="big" id="count">0</span>/2</div>
+  </div>
+
+  <div class="row">
+    <button class="primary" id="startBtn">开始（60秒）</button>
+    <button id="resetBtn">重置</button>
+    <button id="copyBtn" disabled>复制成绩</button>
+  </div>
+
+  <div class="label">考试内容（随机抽句）</div>
+  <div id="questionRaw" class="display"></div>
+
+  <div class="label">输入区域</div>
+  <textarea id="input" disabled placeholder="点击开始后输入…"></textarea>
+
+  <div class="label">智能对齐高亮（只对齐题目开头的输入范围；没打完不算错）</div>
+  <div class="display">
+    <div class="muted">题目对照：</div>
+    <div id="qHL"></div>
+    <div class="muted" style="margin-top:6px;">输入对照：</div>
+    <div id="iHL"></div>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  const DURATION = 60;
+  const MAX_ATTEMPTS = 2;
+
+  // 对齐窗口缓冲：避免刚好卡在一个字上
+  const ALIGN_BUFFER = 30;
+
+  const pool = [
+    "亲，这边已经帮您提交查询了哦，查询需要一些时间，为了不耽误您，还请您半小时后尚未到账再进线咨询进度哦，这边会持续帮您跟进状态的，谢谢~",
+    "您好，欢迎莅临客服中心，很高兴为您服务~",
+    "亲，理解您这边比较着急，目前处理仍需相关单位配合，客服已持续协助跟进并多次催促中，请您稍作等待，我们会持续帮您关注进度。",
+    "我们平台经营多年在行业内都是数一数二很有名气的呢，一直秉持着公平公正的原则，是不会存在您说的这个问题哦。",
+    "亲亲，非常抱歉呢，关于您申请的事宜，我们这儿确实是没有提供这样的服务，所以我们无法给您退还哦。",
+    "亲亲，游戏结果是完全随机的，每一位玩家都有赢和输的可能，这是游戏的本质，也是我们难以预测的部分。",
+    "亲亲，由于您的账号被系统侦测到违规操作，因此我司相关部门反馈您的账号将永久拉黑不给予解除拉黑，非常感谢您这段日子以来的支持以及陪伴~",
+    "亲，这边理解您的想法，但作为平台，我们需要严格遵守风控审查的规定，这些措施是为了确保您的资金安全和平台的稳定运营，小妹希望您能理解和支持我们的决定呢。"
+  ];
+
+  const el = {
+    name: document.getElementById('name'),
+    time: document.getElementById('time'),
+    wpm: document.getElementById('wpm'),
+    correct: document.getElementById('correct'),
+    wrong: document.getElementById('wrong'),
+    acc: document.getElementById('acc'),
+    best: document.getElementById('best'),
+    count: document.getElementById('count'),
+    startBtn: document.getElementById('startBtn'),
+    resetBtn: document.getElementById('resetBtn'),
+    copyBtn: document.getElementById('copyBtn'),
+    questionRaw: document.getElementById('questionRaw'),
+    input: document.getElementById('input'),
+    qHL: document.getElementById('qHL'),
+    iHL: document.getElementById('iHL')
+  };
+
+  let timer = null;
+  let startAt = null;
+  let attempts = 0;
+  let best = 0;
+  let invalid = false;
+  let questionText = "";
+
+  function shuffle(arr){ return [...arr].sort(()=>Math.random()-0.5); }
+  function genQuestion(){ return shuffle(pool).slice(0, 4).join("\n"); }
+
+  function countHan(s){
+    const m = s.match(/[\u4E00-\u9FFF]/g);
+    return m ? m.length : 0;
+  }
+
+  function esc(s){
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+  }
+
+  // ✅ 全形转半形（一对一，长度不变）
+  function normChar(ch){
+    const code = ch.charCodeAt(0);
+    // 全形 ASCII（！ 到 ～）
+    if(code >= 0xFF01 && code <= 0xFF5E){
+      return String.fromCharCode(code - 0xFEE0);
+    }
+    // 全形空格
+    if(code === 0x3000) return " ";
+    // 常见中文标点映射（仍然保证一对一）
+    const map = {
+      "，": ",", "。": ".", "！": "!", "？": "?", "：": ":", "；": ";",
+      "（": "(", "）": ")", "【": "[", "】": "]",
+      "“": "\"","”":"\"","‘":"'","’":"'",
+      "、": ",", "～":"~", "—":"-", "－":"-", "…":"…" // 不做长度变化！
+    };
+    return map[ch] ?? ch;
+  }
+  function normalize(s){ return s.split("").map(normChar).join(""); }
+
+  // 编辑距离 DP + 回溯 ops（带索引）
+  // op: {t:'M'|'S'|'I'|'D', ri?:number, ii?:number}
+  function diffOps(refNorm, inpNorm){
+    const a = refNorm.split('');
+    const b = inpNorm.split('');
+    const n = a.length, m = b.length;
+
+    const dp = Array.from({length:n+1}, ()=>Array(m+1).fill(0));
+    const op = Array.from({length:n+1}, ()=>Array(m+1).fill(''));
+
+    for(let i=0;i<=n;i++){ dp[i][0]=i; op[i][0]='D'; }
+    for(let j=0;j<=m;j++){ dp[0][j]=j; op[0][j]='I'; }
+    op[0][0]='';
+
+    for(let i=1;i<=n;i++){
+      for(let j=1;j<=m;j++){
+        if(a[i-1]===b[j-1]){
+          dp[i][j]=dp[i-1][j-1];
+          op[i][j]='M';
+        }else{
+          const del = dp[i-1][j] + 1;
+          const ins = dp[i][j-1] + 1;
+          const sub = dp[i-1][j-1] + 1;
+          let best = sub, which='S';
+          if(ins < best){ best=ins; which='I'; }
+          if(del < best){ best=del; which='D'; }
+          dp[i][j]=best; op[i][j]=which;
+        }
+      }
+    }
+
+    let i=n, j=m;
+    const ops = [];
+    while(i>0 || j>0){
+      const k = op[i][j];
+      if(k==='M'){ ops.push({t:'M', ri:i-1, ii:j-1}); i--; j--; }
+      else if(k==='S'){ ops.push({t:'S', ri:i-1, ii:j-1}); i--; j--; }
+      else if(k==='I'){ ops.push({t:'I', ii:j-1}); j--; }
+      else if(k==='D'){ ops.push({t:'D', ri:i-1}); i--; }
+      else break;
+    }
+    ops.reverse();
+    return ops;
+  }
+
+  // ✅ 关键：只对齐题目「开头窗口」= 输入长度 + 缓冲
+  function refWindow(ref, inpLen){
+    const win = Math.min(ref.length, Math.max(0, inpLen) + ALIGN_BUFFER);
+    return ref.slice(0, win);
+  }
+
+  // ✅ 不把题目尾巴没打完算错：去掉末尾纯 D
+  function trimTrailingDeletes(ops){
+    let lastConsume = -1;
+    for(let k=0;k<ops.length;k++){
+      if(ops[k].t==='M' || ops[k].t==='S' || ops[k].t==='I') lastConsume = k;
+    }
+    if(lastConsume === -1) return [];
+    return ops.slice(0, lastConsume + 1);
+  }
+
+  function renderSmartHighlight(refOrigFull, inpOrig){
+    // 只取题目开头窗口来对齐，避免“删掉几百字来跳过去”
+    const refOrig = refWindow(refOrigFull, inpOrig.length);
+
+    const refNorm = normalize(refOrig);
+    const inpNorm = normalize(inpOrig);
+
+    let ops = diffOps(refNorm, inpNorm);
+    ops = trimTrailingDeletes(ops);
+
+    let qHtml = "";
+    let iHtml = "";
+    let match = 0;
+    let wrong = 0;
+    let maxRefIdxUsed = -1;
+
+    for(const o of ops){
+      if(o.t==='M'){
+        match++;
+        maxRefIdxUsed = Math.max(maxRefIdxUsed, o.ri ?? -1);
+        qHtml += `<span class="ok">${esc(refOrig[o.ri])}</span>`;
+        iHtml += `<span class="ok">${esc(inpOrig[o.ii])}</span>`;
+      }else if(o.t==='S'){
+        wrong++;
+        maxRefIdxUsed = Math.max(maxRefIdxUsed, o.ri ?? -1);
+        qHtml += `<span class="bad">${esc(refOrig[o.ri])}</span>`;
+        iHtml += `<span class="bad">${esc(inpOrig[o.ii])}</span>`;
+      }else if(o.t==='D'){
+        // 漏字（在输入范围附近才会出现，因为我们截了窗口）
+        wrong++;
+        maxRefIdxUsed = Math.max(maxRefIdxUsed, o.ri ?? -1);
+        qHtml += `<span class="bad">${esc(refOrig[o.ri])}</span>`;
+      }else if(o.t==='I'){
+        // 多字
+        wrong++;
+        iHtml += `<span class="ins">${esc(inpOrig[o.ii])}</span>`;
+      }
+    }
+
+    // 题目窗口剩余部分：不算错、不标红
+    if(maxRefIdxUsed + 1 < refOrig.length){
+      qHtml += esc(refOrig.slice(maxRefIdxUsed + 1));
+    }
+
+    el.qHL.innerHTML = qHtml || "<span class='muted'>(开始后显示)</span>";
+    el.iHL.innerHTML = iHtml || "<span class='muted'>(开始后显示)</span>";
+
+    return {match, wrong};
+  }
+
+  // 节流：防卡顿
+  let pending = false;
+  function calcThrottled(){
+    if(pending) return;
+    pending = true;
+    setTimeout(()=>{ pending=false; calculate(); }, 70);
+  }
+
+  function calculate(){
+    const inp = el.input.value || "";
+    const ref = questionText || "";
+
+    const {match, wrong} = invalid ? {match:0, wrong:0} : renderSmartHighlight(ref, inp);
+
+    const wpm = invalid ? 0 : countHan(inp);
+    const denom = match + wrong;
+    const acc = denom ? Math.round(match/denom*100) : 0;
+
+    el.correct.textContent = String(match);
+    el.wrong.textContent = String(wrong);
+    el.wpm.textContent = invalid ? "无效" : String(wpm);
+    el.acc.textContent = invalid ? "无效" : (acc + "%");
+  }
+
+  function stop(){
+    if(timer) clearInterval(timer);
+    timer = null;
+    el.input.disabled = true;
+
+    calculate();
+    const score = invalid ? 0 : parseInt(el.wpm.textContent, 10) || 0;
+
+    attempts++;
+    el.count.textContent = String(attempts);
+    if(!invalid && score > best) best = score;
+    el.best.textContent = String(best);
+
+    el.copyBtn.disabled = false;
+    el.startBtn.disabled = attempts >= MAX_ATTEMPTS;
+  }
+
+  function start(){
+    if(attempts >= MAX_ATTEMPTS) return alert("已达2次");
+    if(!el.name.value.trim()) return alert("请输入姓名");
+
+    invalid = false;
+    questionText = genQuestion();
+    el.questionRaw.textContent = questionText;
+
+    el.input.value = "";
+    el.input.disabled = false;
+    el.input.focus();
+
+    el.startBtn.disabled = true;
+    el.copyBtn.disabled = true;
+
+    renderSmartHighlight(questionText, "");
+
+    startAt = Date.now();
+    el.time.textContent = "60";
+
+    if(timer) clearInterval(timer);
+    timer = setInterval(()=>{
+      const left = DURATION - Math.floor((Date.now()-startAt)/1000);
+      el.time.textContent = String(Math.max(0,left));
+      calcThrottled();
+      if(left <= 0) stop();
+    }, 200);
+  }
+
+  function reset(){
+    if(timer) clearInterval(timer);
+    timer = null;
+    startAt = null;
+    invalid = false;
+
+    el.time.textContent = "60";
+    el.input.value = "";
+    el.input.disabled = true;
+
+    el.correct.textContent = "0";
+    el.wrong.textContent = "0";
+    el.wpm.textContent = "0";
+    el.acc.textContent = "0%";
+
+    el.qHL.innerHTML = "<span class='muted'>(重置)</span>";
+    el.iHL.innerHTML = "<span class='muted'>(重置)</span>";
+
+    el.startBtn.disabled = attempts >= MAX_ATTEMPTS;
+    el.copyBtn.disabled = attempts === 0;
+  }
+
+  function copyResult(){
+    const n = el.name.value.trim() || "(未填姓名)";
+    const res = `姓名:${n} 最好WPM:${best} 次数:${attempts}/2`;
+    navigator.clipboard.writeText(res).then(()=>alert("已复制：\n"+res))
+      .catch(()=>prompt("复制失败，请手动复制：", res));
+  }
+
+  el.input.addEventListener("paste", (e)=>{
+    e.preventDefault();
+    invalid = true;
+    el.wpm.textContent = "无效";
+    el.acc.textContent = "无效";
+    alert("检测到粘贴：本次成绩判定为无效");
+  });
+
+  el.input.addEventListener("input", ()=>{
+    if(!startAt || el.input.disabled) return;
+    calcThrottled();
+  });
+
+  el.startBtn.addEventListener("click", start);
+  el.resetBtn.addEventListener("click", reset);
+  el.copyBtn.addEventListener("click", copyResult);
+
+  // init
+  questionText = genQuestion();
+  el.questionRaw.textContent = questionText;
+  el.qHL.innerHTML = "<span class='muted'>(开始后显示)</span>";
+  el.iHL.innerHTML = "<span class='muted'>(开始后显示)</span>";
+  el.best.textContent = "0";
+  el.count.textContent = "0";
+  el.copyBtn.disabled = true;
+})();
+</script>
+</body>
+</html>
